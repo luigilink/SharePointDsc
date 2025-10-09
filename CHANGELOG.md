@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added parameters `MetadataEndPoint`, `OidcScope` and `UseStateToRedirect`.
 - SPFarm
   - Added parameters `DatabaseConnectionEncryption` and `DatabaseServerCertificateHostName`.
+- CODEOWNERS
+  - Update CODEOWNERS file [issue #1461](https://github.com/dsccommunity/SharePointDsc/issues/1461).
 
 ## [5.6.1] - 2025-01-29
 

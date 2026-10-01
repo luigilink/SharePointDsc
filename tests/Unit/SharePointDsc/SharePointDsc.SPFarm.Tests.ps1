@@ -3236,16 +3236,73 @@ try
                     }
                 }
 
-                Context -Name "The Set-SPDscCentralAdministrationCertificate helper binds a managed certificate" -Fixture {
+                Context -Name "Test-SPDscCentralAdminBindingMatch" -Fixture {
+                    It "Should return false for a null binding" {
+                        Test-SPDscCentralAdminBindingMatch -Binding $null -Thumbprint "ABC" | Should -Be $false
+                    }
+
+                    It "Should return false for a cert-less binding" {
+                        $b = @{ Certificate = $null; UseServerNameIndication = $true; DisableLegacyTls = $true }
+                        Test-SPDscCentralAdminBindingMatch -Binding $b -Thumbprint "ABC" | Should -Be $false
+                    }
+
+                    It "Should return true when the thumbprint matches and no extra settings are requested" {
+                        $b = @{ Certificate = @{ Thumbprint = "ABC" }; UseServerNameIndication = $true; DisableLegacyTls = $true }
+                        Test-SPDscCentralAdminBindingMatch -Binding $b -Thumbprint "ABC" | Should -Be $true
+                    }
+
+                    It "Should return false when the requested SNI setting differs" {
+                        $b = @{ Certificate = @{ Thumbprint = "ABC" }; UseServerNameIndication = $false; DisableLegacyTls = $true }
+                        Test-SPDscCentralAdminBindingMatch -Binding $b -Thumbprint "ABC" -UseServerNameIndication $true | Should -Be $false
+                    }
+
+                    It "Should return true when the thumbprint and SNI setting both match" {
+                        $b = @{ Certificate = @{ Thumbprint = "ABC" }; UseServerNameIndication = $true; DisableLegacyTls = $true }
+                        Test-SPDscCentralAdminBindingMatch -Binding $b -Thumbprint "ABC" -UseServerNameIndication $true | Should -Be $true
+                    }
+                }
+
+                Context -Name "Get-SPDscCentralAdminSecureBinding" -Fixture {
+                    It "Should return null when there are no secure bindings" {
+                        Get-SPDscCentralAdminSecureBinding -SecureBindings @() -HostHeader "admin.contoso.com" -Port 443 | Should -BeNullOrEmpty
+                    }
+
+                    It "Should return the binding matching the host header and port" {
+                        $bindings = @(
+                            @{ HostHeader = "other.contoso.com"; Port = 443; Tag = "other" },
+                            @{ HostHeader = "admin.contoso.com"; Port = 443; Tag = "target" }
+                        )
+                        (Get-SPDscCentralAdminSecureBinding -SecureBindings $bindings -HostHeader "admin.contoso.com" -Port 443).Tag | Should -Be "target"
+                    }
+
+                    It "Should fall back to the first binding when no host header matches" {
+                        $bindings = @(
+                            @{ HostHeader = ""; Port = 443; Tag = "first" }
+                        )
+                        (Get-SPDscCentralAdminSecureBinding -SecureBindings $bindings -HostHeader "admin.contoso.com" -Port 443).Tag | Should -Be "first"
+                    }
+                }
+
+                Context -Name "The Set-SPDscCentralAdministrationCertificate helper" -Fixture {
                     BeforeAll {
                         Mock -CommandName Start-Sleep -ModuleName 'SPFarm' -MockWith { }
+                        Mock -CommandName Set-SPWebApplication -ModuleName 'SPFarm' -MockWith { }
+                    }
 
-                        # The binding starts without the certificate ($global:SPDscCABindingThumb is
-                        # $null) and Set-SPWebApplication flips it to the bound thumbprint, so the
-                        # helper's verification loop can observe the bind taking effect.
-                        Mock -CommandName Set-SPWebApplication -ModuleName 'SPFarm' -MockWith {
-                            $global:SPDscCABindingThumb = "1111111111111111111111111111111111111111"
+                    It "Should skip the bind without throwing when the certificate is not in Certificate Management" {
+                        Mock -CommandName Get-SPCertificate -ModuleName 'SPFarm' -MockWith { return $null }
+                        { Set-SPDscCentralAdministrationCertificate `
+                                -Thumbprint "1111111111111111111111111111111111111111" `
+                                -HostHeader "admin.contoso.com" `
+                                -Port 443 -WarningAction SilentlyContinue } | Should -Not -Throw
+                        Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm' -Times 0 -Exactly
+                    }
+
+                    It "Should not call Set-SPWebApplication when the certificate is already bound" {
+                        Mock -CommandName Get-SPCertificate -ModuleName 'SPFarm' -MockWith {
+                            return @{ Thumbprint = "1111111111111111111111111111111111111111" }
                         }
+                        # The binding already carries the certificate, so the helper is idempotent.
                         Mock -CommandName Get-SPWebApplication -ModuleName 'SPFarm' -MockWith {
                             $webapp = @{
                                 IsAdministrationWebApplication = $true
@@ -3255,14 +3312,7 @@ try
                                             @{
                                                 HostHeader              = "admin.contoso.com"
                                                 Port                    = 443
-                                                Certificate             = if ($global:SPDscCABindingThumb)
-                                                {
-                                                    @{ Thumbprint = $global:SPDscCABindingThumb }
-                                                }
-                                                else
-                                                {
-                                                    $null
-                                                }
+                                                Certificate             = @{ Thumbprint = "1111111111111111111111111111111111111111" }
                                                 UseServerNameIndication = $true
                                                 DisableLegacyTls        = $true
                                             }
@@ -3271,66 +3321,69 @@ try
                                 }
                             }
                             $webapp | Add-Member -MemberType ScriptMethod -Name GetIisSettingsWithFallback -Value {
-                                [CmdletBinding()]
-                                param(
-                                    [Parameter(Mandatory = $true)]
-                                    [string]
-                                    $Zone
-                                )
-
+                                param($Zone)
                                 return $this.IisSettings[$Zone]
                             }
                             return $webapp
                         }
-                    }
-
-                    It "Should skip the bind without throwing when the certificate is not in Certificate Management" {
-                        $global:SPDscCABindingThumb = $null
-                        Mock -CommandName Get-SPCertificate -ModuleName 'SPFarm' -MockWith { return $null }
-                        Mock -CommandName Set-SPWebApplication -ModuleName 'SPFarm' -MockWith { }
-                        { Set-SPDscCentralAdministrationCertificate `
-                                -Thumbprint "1111111111111111111111111111111111111111" `
-                                -HostHeader "admin.contoso.com" `
-                                -Port 443 -WarningAction SilentlyContinue } | Should -Not -Throw
-                        Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm' -Times 0 -Exactly
-                    }
-
-                    It "Should bind the certificate and not throw when the certificate exists" {
-                        $global:SPDscCABindingThumb = $null
-                        Mock -CommandName Get-SPCertificate -ModuleName 'SPFarm' -MockWith {
-                            return @{ Thumbprint = "1111111111111111111111111111111111111111" }
-                        }
-                        { Set-SPDscCentralAdministrationCertificate `
-                                -Thumbprint "1111111111111111111111111111111111111111" `
-                                -HostHeader "admin.contoso.com" `
-                                -Port 443 `
-                                -UseServerNameIndication $true } | Should -Not -Throw
-                        Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm'
-                    }
-
-                    It "Should not call Set-SPWebApplication when the certificate is already bound" {
-                        $global:SPDscCABindingThumb = "1111111111111111111111111111111111111111"
-                        Mock -CommandName Get-SPCertificate -ModuleName 'SPFarm' -MockWith {
-                            return @{ Thumbprint = "1111111111111111111111111111111111111111" }
-                        }
-                        Mock -CommandName Set-SPWebApplication -ModuleName 'SPFarm' -MockWith { }
                         { Set-SPDscCentralAdministrationCertificate `
                                 -Thumbprint "1111111111111111111111111111111111111111" `
                                 -HostHeader "admin.contoso.com" `
                                 -Port 443 `
                                 -UseServerNameIndication $true } | Should -Not -Throw
                         Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm' -Times 0 -Exactly
+                    }
+
+                    It "Should bind the certificate when it is present but not yet bound" {
+                        # Get-SPCertificate is called once before the bind loop; use it to reset the
+                        # shared read counter in the SPFarm module scope. The Get-SPWebApplication mock
+                        # then returns a cert-less binding on the first (pre-check) read and the bound
+                        # binding on the second (verification) read, so the helper observes the bind.
+                        Mock -CommandName Get-SPCertificate -ModuleName 'SPFarm' -MockWith {
+                            $script:caGetCount = 0
+                            return @{ Thumbprint = "1111111111111111111111111111111111111111" }
+                        }
+                        Mock -CommandName Get-SPWebApplication -ModuleName 'SPFarm' -MockWith {
+                            $script:caGetCount++
+                            $thumb = if ($script:caGetCount -ge 2) { "1111111111111111111111111111111111111111" } else { $null }
+                            $webapp = @{
+                                IsAdministrationWebApplication = $true
+                                IisSettings                    = [ordered]@{
+                                    Default = @{
+                                        SecureBindings = @(
+                                            @{
+                                                HostHeader              = "admin.contoso.com"
+                                                Port                    = 443
+                                                Certificate             = if ($thumb) { @{ Thumbprint = $thumb } } else { $null }
+                                                UseServerNameIndication = $true
+                                                DisableLegacyTls        = $true
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            $webapp | Add-Member -MemberType ScriptMethod -Name GetIisSettingsWithFallback -Value {
+                                param($Zone)
+                                return $this.IisSettings[$Zone]
+                            }
+                            return $webapp
+                        }
+                        { Set-SPDscCentralAdministrationCertificate `
+                                -Thumbprint "1111111111111111111111111111111111111111" `
+                                -HostHeader "admin.contoso.com" `
+                                -Port 443 `
+                                -UseServerNameIndication $true } | Should -Not -Throw
+                        Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm' -Times 1 -Exactly
                     }
 
                     It "Should fall back to the first binding when no host header matches" {
-                        $global:SPDscCABindingThumb = $null
                         Mock -CommandName Get-SPCertificate -ModuleName 'SPFarm' -MockWith {
+                            $script:caGetCount = 0
                             return @{ Thumbprint = "1111111111111111111111111111111111111111" }
                         }
-                        Mock -CommandName Set-SPWebApplication -ModuleName 'SPFarm' -MockWith {
-                            $global:SPDscCABindingThumb = "1111111111111111111111111111111111111111"
-                        }
                         Mock -CommandName Get-SPWebApplication -ModuleName 'SPFarm' -MockWith {
+                            $script:caGetCount++
+                            $thumb = if ($script:caGetCount -ge 2) { "1111111111111111111111111111111111111111" } else { $null }
                             $webapp = @{
                                 IsAdministrationWebApplication = $true
                                 IisSettings                    = [ordered]@{
@@ -3339,14 +3392,7 @@ try
                                             @{
                                                 HostHeader              = ""
                                                 Port                    = 443
-                                                Certificate             = if ($global:SPDscCABindingThumb)
-                                                {
-                                                    @{ Thumbprint = $global:SPDscCABindingThumb }
-                                                }
-                                                else
-                                                {
-                                                    $null
-                                                }
+                                                Certificate             = if ($thumb) { @{ Thumbprint = $thumb } } else { $null }
                                                 UseServerNameIndication = $true
                                                 DisableLegacyTls        = $true
                                             }
@@ -3355,13 +3401,7 @@ try
                                 }
                             }
                             $webapp | Add-Member -MemberType ScriptMethod -Name GetIisSettingsWithFallback -Value {
-                                [CmdletBinding()]
-                                param(
-                                    [Parameter(Mandatory = $true)]
-                                    [string]
-                                    $Zone
-                                )
-
+                                param($Zone)
                                 return $this.IisSettings[$Zone]
                             }
                             return $webapp
@@ -3370,7 +3410,7 @@ try
                                 -Thumbprint "1111111111111111111111111111111111111111" `
                                 -HostHeader "admin.contoso.com" `
                                 -Port 443 } | Should -Not -Throw
-                        Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm'
+                        Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm' -Times 1 -Exactly
                     }
                 }
             }

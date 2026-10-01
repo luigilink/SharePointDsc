@@ -562,10 +562,12 @@ Management (the EndEntity store) by thumbprint and binds it to the Central Admin
 application HTTPS binding using Set-SPWebApplication. It is only usable on SharePoint Server
 Subscription Edition.
 
-If the certificate is not present in Certificate Management the function throws immediately
-(fail-fast), so the caller can ensure ordering (e.g. an SPCertificate resource with a DependsOn).
-Because a freshly imported certificate can be transiently non-bindable, the bind is retried a
-bounded number of times and verified against the resulting binding thumbprint.
+If the certificate is not present in Certificate Management the function writes a warning and
+skips the bind (without throwing), leaving the HTTPS binding cert-less so that a dependent
+SPCertificate resource can import the certificate after the farm exists; the binding then
+converges on a later pass. Because a freshly imported certificate can be transiently non-bindable,
+the bind is retried a bounded number of times and verified against the resulting binding
+thumbprint.
 
 .PARAMETER Thumbprint
 
@@ -621,12 +623,17 @@ function Set-SPDscCentralAdministrationCertificate
     $cert = Get-SPCertificate -Thumbprint $Thumbprint -Store 'EndEntity' -ErrorAction SilentlyContinue
     if ($null -eq $cert)
     {
-        # Ordering problem rather than a timing one: the certificate must already exist in
-        # Certificate Management. Fail fast so the caller adds it first (e.g. SPCertificate +
-        # DependsOn) instead of retrying a state that cannot resolve itself.
-        throw ("No certificate found in SharePoint Certificate Management with thumbprint " + `
-                "'$Thumbprint'. Make sure the certificate is imported first (for example using " + `
-                "the SPCertificate resource) and use DependsOn to enforce the correct order.")
+        # The certificate is not in Certificate Management yet. This is expected on the first
+        # convergence pass of a brand-new farm, where SPCertificate (which depends on SPFarm)
+        # imports the certificate only after the farm exists. Rather than failing the whole
+        # configuration run, skip the bind and leave the HTTPS binding cert-less. Test-TargetResource
+        # keeps reporting the drift, so the binding converges on a later pass once the certificate
+        # has been imported.
+        Write-Warning -Message ("No certificate found in SharePoint Certificate Management with " + `
+                "thumbprint '$Thumbprint'. Skipping the Central Administration certificate binding " + `
+                "for now. Make sure the certificate is imported (for example using the SPCertificate " + `
+                "resource); the binding will be applied on a subsequent configuration pass.")
+        return
     }
 
     $maxAttempts = 3

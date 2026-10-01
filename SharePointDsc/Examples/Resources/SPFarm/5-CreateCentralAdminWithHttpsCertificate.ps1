@@ -34,13 +34,13 @@ Updated author, copyright notice, and URLs.
 <#
 
 .DESCRIPTION
- This example configures Central Administration on a vanity HTTPS URL on an existing
- SharePoint farm and binds a managed certificate to its binding on SharePoint Server
- Subscription Edition. Run this configuration only after the local farm exists. The
- certificate is first imported into SharePoint Certificate Management using the
- SPCertificate resource, and SPFarm binds it to the Central Administration HTTPS
- binding. The DependsOn makes sure the certificate is imported before the binding is
- created. UseServerNameIndication enables Server Name Indication (SNI) on the binding.
+ This example provisions Central Administration on a vanity HTTPS URL and binds a managed
+ certificate to its binding on SharePoint Server Subscription Edition. SharePoint Certificate
+ Management requires an existing farm, so the SPCertificate resource depends on SPFarm and
+ imports the certificate into the store after the farm has been created. The Central
+ Administration certificate binding converges once the certificate is present in the store (on a
+ subsequent DSC pass if the certificate is imported in the same run). UseServerNameIndication
+ enables Server Name Indication (SNI) on the binding.
 
 #>
 
@@ -69,16 +69,6 @@ Configuration Example
 
     node localhost
     {
-        SPCertificate CentralAdminCertificate
-        {
-            CertificateFilePath  = "C:\Certificates\CentralAdmin.pfx"
-            CertificatePassword  = $CertificatePassword
-            Store                = "EndEntity"
-            Exportable           = $true
-            Ensure               = "Present"
-            PsDscRunAsCredential = $SetupAccount
-        }
-
         SPFarm SharePointFarm
         {
             IsSingleInstance                           = "Yes"
@@ -93,7 +83,21 @@ Configuration Example
             CentralAdministrationCertificateThumbprint = "C66D8D6EC9C6E5C6D8A8A0E0F9A0B1C2D3E4F5A6"
             UseServerNameIndication                    = $true
             PsDscRunAsCredential                       = $SetupAccount
-            DependsOn                                  = "[SPCertificate]CentralAdminCertificate"
+        }
+
+        # Certificate Management requires an existing farm, so the certificate is imported after
+        # SPFarm. On the first pass SPFarm provisions the HTTPS Central Administration and
+        # SPCertificate imports the certificate into the store; the binding then converges once the
+        # certificate is present.
+        SPCertificate CentralAdminCertificate
+        {
+            CertificateFilePath  = "C:\Certificates\CentralAdmin.pfx"
+            CertificatePassword  = $CertificatePassword
+            Store                = "EndEntity"
+            Exportable           = $true
+            Ensure               = "Present"
+            PsDscRunAsCredential = $SetupAccount
+            DependsOn            = "[SPFarm]SharePointFarm"
         }
     }
 }

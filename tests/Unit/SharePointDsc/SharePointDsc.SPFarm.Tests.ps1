@@ -3284,13 +3284,15 @@ try
                         }
                     }
 
-                    It "Should throw a clear error when the certificate is not in Certificate Management" {
+                    It "Should skip the bind without throwing when the certificate is not in Certificate Management" {
                         $global:SPDscCABindingThumb = $null
                         Mock -CommandName Get-SPCertificate -ModuleName 'SPFarm' -MockWith { return $null }
+                        Mock -CommandName Set-SPWebApplication -ModuleName 'SPFarm' -MockWith { }
                         { Set-SPDscCentralAdministrationCertificate `
                                 -Thumbprint "1111111111111111111111111111111111111111" `
                                 -HostHeader "admin.contoso.com" `
-                                -Port 443 } | Should -Throw "No certificate found"
+                                -Port 443 -WarningAction SilentlyContinue } | Should -Not -Throw
+                        Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm' -Times 0 -Exactly
                     }
 
                     It "Should bind the certificate and not throw when the certificate exists" {

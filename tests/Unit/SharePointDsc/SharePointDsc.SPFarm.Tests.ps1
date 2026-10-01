@@ -3376,14 +3376,14 @@ try
                         Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm' -Times 1 -Exactly
                     }
 
-                    It "Should fall back to the first binding when no host header matches" {
+                    It "Should select the binding via fallback when no host header matches" {
+                        # The only binding has an empty host header, so the helper must fall back to it
+                        # (rather than failing to find a match). It already carries the certificate, so
+                        # the idempotent helper should not call Set-SPWebApplication at all.
                         Mock -CommandName Get-SPCertificate -ModuleName 'SPFarm' -MockWith {
-                            $script:caGetCount = 0
                             return @{ Thumbprint = "1111111111111111111111111111111111111111" }
                         }
                         Mock -CommandName Get-SPWebApplication -ModuleName 'SPFarm' -MockWith {
-                            $script:caGetCount++
-                            $thumb = if ($script:caGetCount -ge 2) { "1111111111111111111111111111111111111111" } else { $null }
                             $webapp = @{
                                 IsAdministrationWebApplication = $true
                                 IisSettings                    = [ordered]@{
@@ -3392,7 +3392,7 @@ try
                                             @{
                                                 HostHeader              = ""
                                                 Port                    = 443
-                                                Certificate             = if ($thumb) { @{ Thumbprint = $thumb } } else { $null }
+                                                Certificate             = @{ Thumbprint = "1111111111111111111111111111111111111111" }
                                                 UseServerNameIndication = $true
                                                 DisableLegacyTls        = $true
                                             }
@@ -3410,7 +3410,7 @@ try
                                 -Thumbprint "1111111111111111111111111111111111111111" `
                                 -HostHeader "admin.contoso.com" `
                                 -Port 443 } | Should -Not -Throw
-                        Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm' -Times 1 -Exactly
+                        Assert-MockCalled -CommandName "Set-SPWebApplication" -ModuleName 'SPFarm' -Times 0 -Exactly
                     }
                 }
             }

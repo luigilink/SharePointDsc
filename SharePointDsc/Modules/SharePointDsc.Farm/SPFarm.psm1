@@ -456,12 +456,17 @@ function Get-SPDscCentralAdminSecureBinding
         $Port
     )
 
-    if ($null -eq $SecureBindings -or $SecureBindings.Count -eq 0)
+    # Normalise to an array: when the Default zone has a single secure binding, the
+    # SecureBindings property is passed through as a single object rather than a collection, so
+    # indexing with [0] would return $null (or index into a hashtable). Wrapping with @() makes
+    # both the single-binding and multi-binding cases behave consistently.
+    $bindings = @($SecureBindings)
+    if ($bindings.Count -eq 0)
     {
         return $null
     }
 
-    $match = $SecureBindings | Where-Object -FilterScript {
+    $match = $bindings | Where-Object -FilterScript {
         $_.HostHeader -eq $HostHeader -and $_.Port -eq $Port
     } | Select-Object -First 1
 
@@ -470,7 +475,7 @@ function Get-SPDscCentralAdminSecureBinding
         return $match
     }
 
-    return $SecureBindings[0]
+    return $bindings[0]
 }
 
 <#
